@@ -65,7 +65,6 @@ use sp_std::{collections::btree_map::BTreeMap, prelude::*};
 
 // The log target we will use this crate.
 const LOG_TARGET: &'static str = "frameless";
-const BALANCE_LOGIC_TARGET: &'static str = "frameless-balances";
 
 use log::info;
 use parity_scale_codec::{Compact, Decode, Encode};
@@ -74,8 +73,8 @@ use sp_core::{crypto::Ss58Codec, hexdisplay::HexDisplay, sr25519, OpaqueMetadata
 use sp_runtime::{
 	create_runtime_str, generic,
 	traits::{BlakeTwo256, Block as BlockT, Hash},
-	transaction_validity::{self, TransactionSource, TransactionValidity, ValidTransactionBuilder},
-	ApplyExtrinsicResult, DispatchError, ExtrinsicInclusionMode,
+	transaction_validity::{TransactionSource, TransactionValidity, ValidTransactionBuilder},
+	ApplyExtrinsicResult, ArithmeticError, DispatchError, ExtrinsicInclusionMode,
 };
 use sp_version::RuntimeVersion;
 
@@ -88,8 +87,8 @@ const HEADER_KEY: &[u8] = b"header";
 /// Key used to store all extrinsics in a block.
 const EXTRINSICS_KEY: &[u8] = b"extrinsics";
 
-const BALANCE_ADDRESSES_KEY: &[u8] = b"balance_addresses";
-const BALANCE_VALUES_KEY: &[u8] = b"balance_values";
+const SYSTEM_ACCOUNTS_KEY: &[u8] = b"system_accounts";
+const BALANCES_KEY: &[u8] = b"balances";
 
 /// The block number type. You should not change this.
 type BlockNumber = u32;
@@ -269,7 +268,33 @@ impl Runtime {
 	}
 
 	fn do_transfer(from: AccountId, to: AccountId, amount: Balance) -> Result<(), DispatchError> {
-		unimplemented!();
+		let addresses = Runtime::get_state::<Vec<AccountId>>(SYSTEM_ACCOUNTS_KEY)
+			.expect("No system accounts stored");
+		let balances =
+			Runtime::get_state::<Vec<Balance>>(BALANCES_KEY).expect("No balances stored");
+
+		let mut maybe_sender: Option<(AccountId, Balance, usize)> = None;
+		let mut maybe_recipient: Option<(AccountId, Balance, usize)> = None;
+		for (indx, (address, balance)) in addresses.into_iter().zip(balances).enumerate() {
+			if matches!(address.cmp(&from), core::cmp::Ordering::Equal) {
+				maybe_sender = Some((address, balance, indx));
+			} else if matches!(address.cmp(&to), core::cmp::Ordering::Equal) {
+				maybe_recipient = Some((address, balance, indx));
+			}
+		}
+
+		let sender = maybe_sender.expect("No sender found");
+		let recipient = maybe_recipient.unwrap_or_default();
+
+		if amount > sender.1 {
+			return Err(DispatchError::Arithmetic(ArithmeticError::Overflow));
+		}
+
+		Runtime::mutate_state::<Vec<Balance>>(BALANCES_KEY, |old_balance| {
+			old_balance[sender.2] = sender.1 - amount;
+			old_balance[recipient.2] = recipient.1 + amount;
+		});
+
 		Ok(())
 	}
 
@@ -330,7 +355,7 @@ impl Runtime {
 		vec!["//Alice", "//Bob", "//Charlie"].into_iter().for_each(|path| {
 			let pair = sr25519::Pair::from_string(&path, None).unwrap();
 			info!(
-				target: BALANCE_LOGIC_TARGET,
+				target: LOG_TARGET,
 				"Initializing new account {:?} - Seed: {:?}",
 				pair.public().to_ss58check(),
 				from_utf8(pair.to_raw_vec().as_slice())
@@ -347,8 +372,8 @@ impl Runtime {
 			addresses.push(address);
 			balances.push(balance);
 		}
-		sp_io::storage::set(&BALANCE_ADDRESSES_KEY, &addresses.encode());
-		sp_io::storage::set(&BALANCE_VALUES_KEY, &balances.encode());
+		sp_io::storage::set(&SYSTEM_ACCOUNTS_KEY, &addresses.encode().as_slice());
+		sp_io::storage::set(&BALANCES_KEY, &balances.encode().as_slice());
 		sp_io::storage::set(&VALUE_KEY, &runtime_genesis.value.encode());
 		Ok(())
 	}
