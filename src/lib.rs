@@ -1,130 +1,4 @@
 //! # FRAMELess Runtime
-//!
-//! Welcome to the FRAMELess assignment.
-//!
-//! > This assignment is based on Joshy's experiment years ago to explore building a Substrate
-//! > runtime using pure Rust. If you learn something new in this exercise, attribute it to his
-//! > work.
-//!
-//! The code in the rust crate is a basic Substrate-but-not-FRAME-based-runtime. It uses only crates
-//! from the substrate primitives, and the final outcome of it is a fully functioning
-//! Substrate-based runtime. How cool is that?
-//!
-//! This assignment is not graded, and therefore does not have one strict set of requirements. We
-//! provide you with a list of suggestions, and you do as you prefer. Try and maximize your learning
-//! while working with this template. From experience, we know that one of the unique things
-//! students learn is PBA is "how things work under the hood", and this template is indeed one of
-//! those.
-//!
-//! ## Suggestions
-//!
-//! * Understand the code. This will be done in a walkthrough in the class.
-//! * Run tests and understand what each one is testing.
-//!
-//! > In these two steps, you should pay close attention to why/how the state root is being kept
-//! > correctly. Moreover, you will know which runtime-apis are used at which steps.
-//!
-//!
-//! * Run this runtime. For this assignment, we only use a custom node that is independent of your
-//!   runtime. We call such nodes an `omni-node`.
-//! * Work with RPCs and your runtime. Read existing state (`:code`). Submit a simple
-//!   `Call::SetValue`.
-//! * Work with `chain-spec-builder` to create a chain spec for your runtime, use an existing
-//!   preset, or generate default + patch.
-//!
-//! Finally, feel free then to extend the runtime with more application logic. You have two general
-//! ways:
-//!
-//! 1. Add a mapping of account-ids and balances, and implement a simple transfer function.
-//! 2. Add proper signature verification to the extrinsics.
-//!
-//! ## How to Run
-//!
-//! You can run this runtime with a custom minimal `omni-node` that is prepared for PBA.
-//!
-//! First:
-//!
-//! ```text
-//! cargo install --force --git https://github.com/kianenigma/pba-omni-node
-//! ```
-//!
-//! Then, you can run:
-//!
-//! ```text
-//! # build the wasm runtime, possibly with log targets.
-//! RUST_LOG=frameless=info cargo build --release
-//! # pass it to the node
-//! RUST_LOG=frameless=debug
-//! pba-omni-node
-//! 	# the path to the runtime.
-//! 	--runtime ./target/release/wbuild/runtime/runtime.wasm \
-//! 	# ensures we spin up a new database each time.
-//! 	--tmp \
-//! 	# tweak the blocktime, if you want.
-//! 	--consensus manual-seal-1000
-//! ```
-//!
-//! This will launch your chain with no initial state, yay! Try reading a few keys from the state
-//! now:
-//!
-//! ```text
-//! wscat -c 127.0.0.1:9944 -x '{"jsonrpc":"2.0", "id":1, "method":"state_getStorage", "params": ["76616c7565"] }`
-//! ```
-//!
-//! Or equivalently:
-//!
-//! ```curl
-//! curl -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0", "id":1, "method":"state_getStorage", "params": ["76616c7565"] }' http://127.0.0.1:9944
-//! ```
-//!
-//! Can you guess what is this?
-//!
-//! ```text
-//! wscat -c 127.0.0.1:9944 -x '{"jsonrpc":"2.0", "id":1, "method":"state_getStorage", "params": ["3a636f6465"] }
-//! ```
-//!
-//! If you want to try submitting a transaction, you can use the following:
-//!
-//! ```text
-//! wscat -c ws://127.0.0.1:9944 -x '{"jsonrpc":"2.0", "id":1, "method":"author_submitExtrinsic", "params": [""]}'
-//! ```
-//!
-//! You can use the `encode_examples` below to get an encoded extrinsic.
-//!
-//! ## Building a Chain Spec
-//!
-//! First, install the right version of the chain-spec builder:
-//! ```text
-//! cargo install staging-chain-spec-builder
-//! ```
-//!
-//! ### Understanding Chain Specs
-//!
-//! Let's quickly explore how the chian-spec builder works:
-//!
-//! * The chain spec is a JSON file describing what the the initial specification of the chain is.
-//! * It is an important feature of the omni-node-driven future of Polkadot.
-//! * It contains many important pieces of information, but notable the genesis state, which we call
-//!   `GenesisConfig`.
-//!
-//! The main flow of the chain-spec is as follows:
-//!
-//! * It is passed into the runtime, as a JSON encoded object, via the `build_state` API, and the
-//!   runtime is responsible to build whatever is needed for it.
-//!
-//! The runtime will in itself expose instances of `GenesisConfig`, named `presets`. These are
-//! various instances of the `GenesisConfig` that the runtime deems useful, for example one for
-//! production, and one for testing.
-//!
-//! The runtime returns these presets via `get_preset` and `get_preset_names` APIs.
-//!
-//! Finally, the `chain-spec-builder` is a utility that communicates with the runtime, and creates a
-//! chain-spec for you based on any of the presets, or the `Default` impl of `GenesisConfig` if none
-//! is provided.
-//!
-//! You are always welcome to edit the final JSON file with hand as well, of course.
-//!
-//! The following diagram demonstrates all of this:
 #![doc = simple_mermaid::mermaid!("../spec.mmd" left)]
 //!
 //! ### Launching a Chain With Chain Spec
@@ -182,39 +56,40 @@
 // The following 3 lines are related to your WASM build. Don't change.
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use core::str::from_utf8;
+
 use scale_info::TypeInfo;
 // imports the `substrate`'s WASM-compatible standard library. This should give you all standard
 // items like `vec!`. Do NOT bring in `std` from Rust, as this will not work in WASM.
-use sp_std::prelude::*;
+use sp_std::{collections::btree_map::BTreeMap, prelude::*};
 
 // The log target we will use this crate.
 const LOG_TARGET: &'static str = "frameless";
+const BALANCE_LOGIC_TARGET: &'static str = "frameless-balances";
 
 use log::info;
 use parity_scale_codec::{Compact, Decode, Encode};
 use sp_api::impl_runtime_apis;
-use sp_core::{hexdisplay::HexDisplay, OpaqueMetadata, H256};
+use sp_core::{crypto::Ss58Codec, hexdisplay::HexDisplay, sr25519, OpaqueMetadata, Pair, H256};
 use sp_runtime::{
 	create_runtime_str, generic,
 	traits::{BlakeTwo256, Block as BlockT, Hash},
-	transaction_validity::{TransactionSource, TransactionValidity, ValidTransactionBuilder},
-	ApplyExtrinsicResult, ExtrinsicInclusionMode,
+	transaction_validity::{self, TransactionSource, TransactionValidity, ValidTransactionBuilder},
+	ApplyExtrinsicResult, DispatchError, ExtrinsicInclusionMode,
 };
 use sp_version::RuntimeVersion;
 
 /// The key to which [`Call::SetValue`] will write the value.
-///
-/// Hex: 0x76616c7565
 const VALUE_KEY: &[u8] = b"value";
 /// Temporary key used to store the header. This should always be clear at the end of the block.
 ///
 /// Hex: 0x686561646572
 const HEADER_KEY: &[u8] = b"header";
 /// Key used to store all extrinsics in a block.
-///
-/// Should always remain in state at the end of the block, and be flushed at the beginning of the
-/// next block.
 const EXTRINSICS_KEY: &[u8] = b"extrinsics";
+
+const BALANCE_ADDRESSES_KEY: &[u8] = b"balance_addresses";
+const BALANCE_VALUES_KEY: &[u8] = b"balance_values";
 
 /// The block number type. You should not change this.
 type BlockNumber = u32;
@@ -232,6 +107,7 @@ type AccountId = sp_core::sr25519::Public;
 enum Call {
 	SetValue { value: u32 },
 	UpgradeCode { code: Vec<u8> },
+	Transfer { from: AccountId, to: AccountId, amount: Balance },
 }
 
 #[derive(TypeInfo, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -286,6 +162,9 @@ type Header = generic::Header<BlockNumber, BlakeTwo256>;
 
 /// The block type of the runtime.
 type Block = generic::Block<Header, SignedExtrinsic>;
+
+/// The balance of the account
+type Balance = u64;
 
 /// This runtime version.
 #[sp_version::runtime_version]
@@ -342,6 +221,7 @@ impl Runtime {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct RuntimeGenesis {
 	pub(crate) value: u32,
+	pub(crate) balances: BTreeMap<AccountId, Balance>,
 }
 
 // This impl block contains the core runtime api implementations. It contains good starting points
@@ -377,13 +257,32 @@ impl Runtime {
 		header
 	}
 
+	fn do_set_value(value: u32) -> Result<(), DispatchError> {
+		// Playing with the apply extrinsic result
+		if value > 1000 {
+			return Err(DispatchError::Other("Invalid amount of value"));
+		}
+		Runtime::mutate_state(VALUE_KEY, |old| {
+			*old = value;
+		});
+		Ok(())
+	}
+
+	fn do_transfer(from: AccountId, to: AccountId, amount: Balance) -> Result<(), DispatchError> {
+		unimplemented!();
+		Ok(())
+	}
+
 	/// Apply a single extrinsic.
 	///
 	/// In our template, we call into this from both block authoring, and block import.
 	pub(crate) fn do_apply_extrinsic(ext: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
-		let dispatch_outcome = match ext.clone().function {
-			_ => Ok(()),
-		};
+		let dispatch_outcome =
+			match ext.clone().function {
+				Call::SetValue { value } => Runtime::do_set_value(value),
+				Call::Transfer { from, to, amount } => Runtime::do_transfer(from, to, amount),
+				_ => Ok(()),
+			};
 
 		log::debug!(target: LOG_TARGET, "dispatched {:?}, outcome = {:?}", ext, dispatch_outcome);
 
@@ -426,27 +325,56 @@ impl Runtime {
 		info!(target: LOG_TARGET, "Finishing block import.");
 	}
 
+	fn init_default_balances() -> BTreeMap<AccountId, u64> {
+		// Initializing a set of default accounts with balances
+		let mut special_preset_balances = BTreeMap::default();
+		vec!["//Alice", "//Bob", "//Charlie"].into_iter().for_each(|path| {
+			let pair = sr25519::Pair::from_string(&path, None).unwrap();
+			info!(
+				target: BALANCE_LOGIC_TARGET,
+				"Initializing new account {:?} - Seed: {:?}",
+				pair.public().to_ss58check(),
+				from_utf8(pair.to_raw_vec().as_slice())
+			);
+			special_preset_balances.insert(pair.public(), 10000000000);
+		});
+		special_preset_balances
+	}
+
 	pub(crate) fn do_build_state(runtime_genesis: RuntimeGenesis) -> sp_genesis_builder::Result {
-		sp_io::storage::set(&VALUE_KEY, &runtime_genesis.value.encode());
+		let mut addresses: Vec<AccountId> = vec![];
+		let mut balances: Vec<u64> = vec![];
+		for (address, balance) in runtime_genesis.balances {
+			addresses.push(address);
+			balances.push(balance);
+		}
+		sp_io::storage::set(&BALANCE_ADDRESSES_KEY, addresses.encode().as_slice());
+		sp_io::storage::set(&BALANCE_VALUES_KEY, balances.encode().as_slice());
 		Ok(())
 	}
 
 	pub(crate) fn do_get_preset(id: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
+		const INITIAL_PRESET_VALUE: u32 = 100;
+		const DEFAULT_PRESET_NAME: &str = "special-preset-1";
+
 		match id {
 			Some(preset_id) =>
-				if preset_id.as_ref() == "special-preset-1".as_bytes() {
+				if preset_id.as_ref() == DEFAULT_PRESET_NAME.as_bytes() {
 					Some(
-						serde_json::to_string(&RuntimeGenesis { value: 42 * 2 })
-							.unwrap()
-							.as_bytes()
-							.to_vec(),
+						serde_json::to_string(&RuntimeGenesis {
+							value: INITIAL_PRESET_VALUE,
+							balances: Runtime::init_default_balances(),
+						})
+						.unwrap()
+						.as_bytes()
+						.to_vec(),
 					)
 				} else {
 					None
 				},
 			// none indicates the default preset.
 			None => Some(
-				serde_json::to_string(&RuntimeGenesis { value: 42 })
+				serde_json::to_string(&RuntimeGenesis { value: 0, balances: BTreeMap::default() })
 					.unwrap()
 					.as_bytes()
 					.to_vec(),
@@ -558,7 +486,7 @@ impl_runtime_apis! {
 	impl sp_api::Metadata<Block> for Runtime {
 		fn metadata() -> OpaqueMetadata {
 			// This is a FRAME-Less runtime, we have no clue what its metadata is 🤷
-			OpaqueMetadata::new(Default::default())
+			OpaqueMetadata::new(vec![1, 2, 3, 4, 5])
 		}
 
 		fn metadata_at_version(_version: u32) -> Option<OpaqueMetadata> {
@@ -613,6 +541,7 @@ mod tests {
 		};
 
 		state.execute_with(|| {
+			// Initializing the block, clearning up the extrinsic list and store new header
 			Runtime::do_initialize_block(&header);
 			drop(header);
 
@@ -713,10 +642,6 @@ mod tests {
 	#[test]
 	fn encode_examples() {
 		// demonstrate some basic encodings. Example usage:
-		//
-		// ```
-		// wscat -c ws://127.0.0.1:9944 -x '{"jsonrpc":"2.0", "id":1, "method":"author_submitExtrinsic", "params": ["0x123"]}'
-		// ```
 		let call = Call::SetValue { value: 1234 };
 		let unsigned_ext = SignedExtrinsic::new(call, None).unwrap();
 
