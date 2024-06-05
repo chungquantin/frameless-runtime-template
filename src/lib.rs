@@ -277,12 +277,11 @@ impl Runtime {
 	///
 	/// In our template, we call into this from both block authoring, and block import.
 	pub(crate) fn do_apply_extrinsic(ext: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
-		let dispatch_outcome =
-			match ext.clone().function {
-				Call::SetValue { value } => Runtime::do_set_value(value),
-				Call::Transfer { from, to, amount } => Runtime::do_transfer(from, to, amount),
-				_ => Ok(()),
-			};
+		let dispatch_outcome = match ext.clone().function {
+			Call::SetValue { value } => Runtime::do_set_value(value),
+			Call::Transfer { from, to, amount } => Runtime::do_transfer(from, to, amount),
+			_ => Ok(()),
+		};
 
 		log::debug!(target: LOG_TARGET, "dispatched {:?}, outcome = {:?}", ext, dispatch_outcome);
 
@@ -348,8 +347,9 @@ impl Runtime {
 			addresses.push(address);
 			balances.push(balance);
 		}
-		sp_io::storage::set(&BALANCE_ADDRESSES_KEY, addresses.encode().as_slice());
-		sp_io::storage::set(&BALANCE_VALUES_KEY, balances.encode().as_slice());
+		sp_io::storage::set(&BALANCE_ADDRESSES_KEY, &addresses.encode());
+		sp_io::storage::set(&BALANCE_VALUES_KEY, &balances.encode());
+		sp_io::storage::set(&VALUE_KEY, &runtime_genesis.value.encode());
 		Ok(())
 	}
 
@@ -358,7 +358,7 @@ impl Runtime {
 		const DEFAULT_PRESET_NAME: &str = "special-preset-1";
 
 		match id {
-			Some(preset_id) =>
+			Some(preset_id) => {
 				if preset_id.as_ref() == DEFAULT_PRESET_NAME.as_bytes() {
 					Some(
 						serde_json::to_string(&RuntimeGenesis {
@@ -371,7 +371,8 @@ impl Runtime {
 					)
 				} else {
 					None
-				},
+				}
+			},
 			// none indicates the default preset.
 			None => Some(
 				serde_json::to_string(&RuntimeGenesis { value: 0, balances: BTreeMap::default() })
