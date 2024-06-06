@@ -72,7 +72,7 @@ use sp_api::impl_runtime_apis;
 use sp_core::{crypto::Ss58Codec, hexdisplay::HexDisplay, sr25519, OpaqueMetadata, Pair, H256};
 use sp_runtime::{
 	create_runtime_str, generic,
-	traits::{BlakeTwo256, Block as BlockT, Hash},
+	traits::{BlakeTwo256, Block as BlockT, Hash, Verify},
 	transaction_validity::{TransactionSource, TransactionValidity, ValidTransactionBuilder},
 	ApplyExtrinsicResult, ArithmeticError, DispatchError, ExtrinsicInclusionMode,
 };
@@ -304,7 +304,12 @@ impl Runtime {
 	pub(crate) fn do_apply_extrinsic(ext: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
 		let dispatch_outcome = match ext.clone().function {
 			Call::SetValue { value } => Runtime::do_set_value(value),
-			Call::Transfer { from, to, amount } => Runtime::do_transfer(from, to, amount),
+			Call::Transfer { from, to, amount } => {
+				if let Some((account_id, signature)) = ext.clone().signature {
+					signature.verify(&*ext.clone().function.encode(), &account_id);
+				}
+				Runtime::do_transfer(from, to, amount)
+			},
 			_ => Ok(()),
 		};
 
@@ -662,6 +667,15 @@ mod tests {
 		// functions in `TestExternalities`.
 		TestExternalities::new_empty().execute_with(|| {
 			println!("it works! {:?}", sp_io::storage::get(&VALUE_KEY));
+		})
+	}
+
+	#[test]
+	fn host_function_call_works_for_accounts() {
+		// this is just to demonstrate to you that you should always wrap any code containing host
+		// functions in `TestExternalities`.
+		TestExternalities::new_empty().execute_with(|| {
+			println!("it works! {:?}", sp_io::storage::get(&SYSTEM_ACCOUNTS_KEY));
 		})
 	}
 
